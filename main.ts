@@ -1,46 +1,51 @@
-// cbBTC/USDC range trader for agent-fun/bars-replay/v1 — v2.
+// cbBTC/USDC range trader for agent-fun/bars-replay/v1 — v3.
 //
 // Strategy: slow Bollinger mean reversion on 1-minute closes.
 //   - Keep a rolling window of the last 240 closes (4 hours).
 //   - Buy full size (all cash) when the latest close is at or below
-//     SMA(240) - 2.7 * std(240)  (an extreme dip vs the 4h mean).
+//     SMA(240) - 2.8 * std(240)  (an extreme dip vs the 4h mean).
 //   - Sell the whole position when the latest close is at or above
-//     SMA(240) + 2.7 * std(240)  (an extreme rally), or when the close
+//     SMA(240) + 2.8 * std(240)  (an extreme rally), or when the close
 //     falls 200 bps below the entry close (stop-loss, race-window guard).
 //   - Fallback: if no buy has filled by bar 1000 and the bot is still
 //     flat, buy full size at the market. A race window that only rises
 //     may never touch the lower band; without this the bot could end the
 //     window with zero trades and fail the guardrail.
 //
-// v2 change vs v1 (BAND_K 2.5 -> 2.7) and why it should generalise:
-//   - HARNESS-CONFIRMED (grade-local, --driver process, run twice,
-//     identical action logs): net PnL 18,949,736 quote units ($18.95),
-//     return +1.895%, Sharpe 0.0356, Sortino 0.0629, max drawdown 0.72%,
-//     win rate 1.0, 4 fills, fees $1.62. v1 on the same harness:
-//     16,260,277 units ($16.26), Sharpe 0.0304. v2 beats v1 by
-//     2,689,459 units (+16.5%) with the same drawdown and trade count.
-//   - On the frozen dev window the first trip is identical at any
-//     k in [2.5, 2.85] (buy bar 369 @ $64,135, sell bar 511 @ $65,013).
-//     The whole gain from widening the band comes from the second trip:
-//     k=2.5 buys the dip at bar 1097 @ $64,647, k=2.7 waits 3 more bars
-//     and buys at bar 1100 @ $64,551 — a deeper dip, a cheaper entry,
-//     more reversion room. Net dev PnL $18.95, positive in both halves
-//     of the window ($12.88 / $6.07).
-//   - 2.7 is the CENTRE of a plateau, not a tuned spike: k in
-//     [2.6, 2.85] all give $18.11-$19.30 with the same 2 trips, and
-//     windows 200-240 at k=2.75 give $18.34-$18.95. At k=2.9 the second
-//     dip never triggers and PnL falls to $12.88 — so 2.7 keeps a
-//     safety margin from that cliff, while 2.8 ($19.30, +$0.35 more)
-//     sits one step from it. The extra $0.35 is noise; the margin is not.
-//   - Things tried and REJECTED on the same window (all with the kit
-//     replay, same costs): exiting at the mean (+$0.59) or at +1 sigma,
-//     take-profit exits at +80 bps ($15.30), partial exits at the mean
-//     (fee churn, 70+ fills), trailing stops at 40-60 bps (whipsawed
-//     out of the big rally, negative), entry confirmation on a bounce
-//     (misses the second trip entirely), shorter windows 60-120
-//     (overtrading noise, negative), longer exit windows 300-360
-//     (second trip goes negative). The upper-band exit at the same k
-//     as the entry band is what the data supports, in both halves.
+// v3 change vs v2 (BAND_K 2.7 -> 2.8) and why it is the plateau top:
+//   - HARNESS-CONFIRMED (grade-local, --driver process, 3 runs,
+//     identical action logs, sha 3acbf59b…c8fa2d): net PnL 19,303,059 quote units ($19.30),
+//     return +1.930%, Sharpe 0.0367, Sortino 0.0655, max drawdown 0.72%,
+//     win rate 1.0, 4 fills, fees $1.62. v2 on the same harness:
+//     18,949,736 units ($18.95), Sharpe 0.0356. v3 beats v2 by
+//     353,323 units (+1.86%) with the same drawdown and trade count.
+//   - The gain is again entirely in trip 2: at k=2.8 the band waits for
+//     the dip to deepen one step further and buys cheaper into the same
+//     reversion, selling into the same upper band.
+//   - CORRECTION to v2's cliff estimate: the v3 sweep found the cliff
+//     is at k ~ 2.86, not 2.9. k=2.87 and 2.88 both lose trip 2 entirely
+//     (2 trades, $12.88). k=2.85 gives the IDENTICAL action log to 2.8,
+//     so the plateau is k in [2.6, 2.85] and 2.8 sits 0.06 from its edge
+//     — a thinner margin than v2 assumed. The +$0.35 over v2 is small;
+//     the live-window trade-off is real: 2.8 buys cheaper on deep dips
+//     but catches fewer shallow dips than 2.7. The fallback buy at bar
+//     1000 still covers the >=1-trade guardrail either way.
+//   - Full v3 sweep (18 parameter variants + 4 cliff/window probes,
+//     same harness, same costs): no other variant beats $19.30.
+//     k=2.85 identical to 2.8; windows 220/230/250/260/280/300 at
+//     k=2.7-2.8 all worse ($14.26-$18.34); asymmetric exits (exit 2.5 or
+//     3.0 at entry 2.7/2.8) all worse ($14.26-$18.34); stop 150/300/none
+//     never triggers in dev (identical logs). Scale-in was considered
+//     and rejected by arithmetic, not by trial: trip 2's dip bottoms at
+//     ~-2.86 sigma, so any second tier deeper than that never fills in
+//     dev, and any tier inside the dip averages in above the single
+//     2.8 buy — it cannot beat 2.8 on this window.
+//   - Things already rejected in v2 and not re-tried: exit at the mean
+//     (+$0.59) or +1 sigma, take-profit +80 bps, partial exits at the
+//     mean (fee churn), trailing stops 40-60 bps (whipsawed), entry
+//     confirmation on a bounce (misses trip 2), short windows 60-120
+//     (overtrading noise), longer exit windows 300-360 (trip 2 goes
+//     negative), entry on the bar's low.
 //   - Principle, not curve-fit: in mean reversion on a pool whose
 //     per-bar noise is ~6 bps and whose round trip costs ~26 bps, only
 //     extreme dislocations pay. Waiting for a deeper dislocation buys
@@ -66,9 +71,9 @@ import type { BarsState, Batch, OrderInput } from './vendor/makefun-bars.ts';
 
 const SYMBOL = 'CBBTC';
 
-// --- strategy parameters (v2: BAND_K 2.5 -> 2.7, see header) ---
+// --- strategy parameters (v3: BAND_K 2.7 -> 2.8, plateau top; see header) ---
 const WINDOW = 240; // bars in the rolling mean/std (4 hours)
-const BAND_K = 2.7; // band width in standard deviations (plateau centre)
+const BAND_K = 2.8; // band width in standard deviations (plateau top)
 const STOP_BPS = 200; // stop-loss: sell if close falls 200 bps under entry
 const MAX_SLIPPAGE_BPS = 150; // per-order cap vs latest close (fills run ~10 bps)
 const LAST_TRADE_SEQ = 1438; // do not order on the last batch (after_end)
